@@ -3,6 +3,9 @@
 
 #ouster pcap requirements
 ouster-sdk[examples]
+
+typer[all]~=0.7.0
+
 #
 # # Base ----------------------------------------
 # matplotlib>=3.2.2
@@ -48,3 +51,22 @@ ouster-sdk[examples]
 # # albumentations>=1.0.3
 # # pycocotools>=2.0  # COCO mAP
 # # roboflow
+
+torch~=1.13.0
+pyyaml~=6.0
+argparse~=1.4.0
+pillow~=9.2.0
+torchvision~=0.14.0
+tqdm~=4.64.1
+numpy~=1.23.3
+opencv-python~=4.6.0.66
+matplotlib~=3.6.0
+pandas~=1.5.1
+seaborn~=0.12.1
+ipython~=8.6.0
+requests~=2.28.1
+psutil~=5.9.3
+flask~=2.2.2
+thop~=0.1.1-2209072238
+rich~=12.6.0
+joblib~=1.2.0
