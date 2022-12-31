@@ -19,9 +19,6 @@ import cv2
 import numpy as np
 from joblib import Parallel, delayed
 
-
-# tasks = []
-
 def transform_pcap(meta_path, file_path, save_path, clip, channels, extract_video, apply_filter):
     print(f"\n Working on {file_path}")
 
@@ -135,7 +132,12 @@ def recurse_transform(base, transform_fun, clip, channels, extract_video, apply_
         pcap_files = list(filter(lambda x: x.endswith(".pcap"), files))
 
         # meta_files = map(lambda x: str(Path(x).with_suffix(".json")),pcap_files)
-        meta_files = map(lambda x: join(base, "meta.json"), pcap_files)
+        meta_files = list(map(lambda x: join(base, x),filter(lambda x: x.endswith(".json"), files)))
+
+        if len(meta_files) != 1:
+            meta_files = map(lambda x: str(Path(x).with_suffix(".json").resolve()), pcap_files)
+        else:
+            meta_files = [meta_files[0]] * len(pcap_files)
 
         if pcap_files:
             progress.add_task(description=f"Started a folder containing {pcap_files}", total=None)
