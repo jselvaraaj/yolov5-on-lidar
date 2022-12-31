@@ -23,7 +23,7 @@ from joblib import Parallel, delayed
 # tasks = []
 
 def transform_pcap(meta_path, file_path, save_path, clip, channels, extract_video, apply_filter):
-    print(f"Started {file_path}")
+    print(f"\n Working on {file_path}")
 
     with open(meta_path, 'r') as f:
         metadata = client.SensorInfo(f.read())
@@ -115,7 +115,7 @@ def transform_pcap(meta_path, file_path, save_path, clip, channels, extract_vide
             vid_writer_nir.release()
 
         cv2.destroyAllWindows()
-        print(f"Finished {file_path}")
+        print(f"\nFinished {file_path}")
 
 
 progress_text = Progress(
@@ -138,7 +138,7 @@ def recurse_transform(base, transform_fun, clip, channels, extract_video, apply_
         meta_files = map(lambda x: join(base, "meta.json"), pcap_files)
 
         if pcap_files:
-            progress.add_task(description=f"Started {pcap_files}", total=None)
+            progress.add_task(description=f"Started a folder containing {pcap_files}", total=None)
 
             Parallel(n_jobs=4)(
                 delayed(transform_fun)(meta, join(base, pcap), join(base, Path(pcap).stem), clip, channels,
