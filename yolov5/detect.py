@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 import csv
+from threading import Thread
 import torch
 
 FILE = Path(__file__).resolve()
@@ -48,12 +49,14 @@ from utils.general import (LOGGER, Profile, check_file, check_img_size, check_im
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, smart_inference_mode
 
+from utils.ouster_viz import Visualizer
 
 @smart_inference_mode()
 def run(
         weights=ROOT / 'yolov5s.pt',  # model path or triton URL
-        source= '../../data/Sample_Data/data.pcap',  # file/dir/URL/glob/screen/0(webcam)
-        meta='../../data/Sample_Data/meta.json',  # file/dir/URL/glob/screen/0(webcam)
+        source= ROOT / 'data/pcaps/data.pcap',  # file/dir/URL/glob/screen/0(webcam)
+        meta= ROOT / 'data/pcaps/meta.json',  # file/dir/URL/glob/screen/0(webcam)
+        viz = None,
         data=ROOT / 'data/coco128.yaml',  # dataset.yaml path
         imgsz=(640, 640),  # inference size (height, width)
         conf_thres=0.25,  # confidence threshold
@@ -80,7 +83,11 @@ def run(
         dnn=False,  # use OpenCV DNN for ONNX inference
         vid_stride=1,  # video frame-rate stride
         save_csv=False,
+        run_ouster_viz= False
 ):
+    if run_ouster_viz and viz is None:
+        raise Exception("Viz is empty")
+
     source = str(source)
     meta_path = str(meta)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
@@ -96,7 +103,7 @@ def run(
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
     if save_csv:
-        csvfile = open(f"{str(source)}.csv","w")
+        csvfile = open(f"{os.path.join(save_dir,Path(str(source)).stem)}.csv","w")
         csvwriter = csv.writer(csvfile)
         csvwriter.writerow(["frame","xywh","class","confidence"])
 
@@ -114,7 +121,12 @@ def run(
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
-    for path, im, im0s, vid_cap, s, util_vals in dataset:
+    for path, im, im0s, vid_cap, s, utils in dataset:
+
+        scan, = utils
+
+        if run_ouster_viz:
+            cloud_scan = viz.add_scan(scan)
 
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
@@ -207,7 +219,8 @@ def run(
                         save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
-
+        if run_ouster_viz:
+            viz.remove_obj(cloud_scan)
         # Print time (inference-only)
         LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
 
@@ -227,8 +240,11 @@ def run(
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path or triton URL')
-    parser.add_argument('--source', type=str, default= '../../data/Sample_Data/data.pcap', help='path of the pcap file')
-    parser.add_argument('--meta', type=str, default='../../data/Sample_Data/meta.json', help='path of the metadata')
+    parser.add_argument('--source', type=str, default= ROOT / 'data/pcaps/data.pcap', help='path of the pcap file')
+    parser.add_argument('--meta', type=str, default=ROOT / 'data/pcaps/meta.json', help='path of the metadata')
+    parser.add_argument('--run-ouster-viz', default = False, action='store_true', help='visualize features')
+    parser.add_argument('--save-csv', default= True, action="store_true", help='Save predictions in a csv file')
+    
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='(optional) dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
@@ -254,7 +270,6 @@ def parse_opt():
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
     parser.add_argument('--vid-stride', type=int, default=1, help='video frame-rate stride')
-    parser.add_argument('--save-csv', action="store_true", help='Save predictions in a csv file')
 
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
@@ -264,8 +279,19 @@ def parse_opt():
 
 def main(opt):
     check_requirements(exclude=('tensorboard', 'thop'))
-    run(**vars(opt))
 
+    if opt.run_ouster_viz:
+        with Visualizer() as viz:
+            
+            args = vars(opt)
+            args['viz'] = viz
+            thread = Thread(target=run, kwargs=args, daemon=True)
+
+            thread.start()
+            viz.run()
+    else:
+        run(**vars(opt))
+        
 
 if __name__ == "__main__":
     opt = parse_opt()

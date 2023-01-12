@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from ouster import client
 from ouster import pcap
+from utils.ouster_utils import ScanWrapper
 
 from collections import deque
 
@@ -416,9 +417,10 @@ class LoadPcapStreams:
       sig_img = np.dstack((sig_img, sig_img, sig_img))
       
       xyzlut = client.XYZLut(self.metadata)
-      xyz_destaggered = client.destagger(self.metadata, xyzlut(scan))
-
-      return (sig_img[None,...], str(scan.frame_id)) , range_img, xyz_destaggered
+    #   xyz_destaggered = client.destagger(self.metadata, xyzlut(scan))
+      
+      s_wrapper = ScanWrapper(scan, self.metadata, xyzlut)
+      return (sig_img[None,...], str(scan.frame_id)) , s_wrapper
 
     def __exit__(self):
       self.scans.close()
