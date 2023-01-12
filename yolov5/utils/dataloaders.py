@@ -18,6 +18,11 @@ from pathlib import Path
 from threading import Thread
 from urllib.parse import urlparse
 
+from ouster import client
+from ouster import pcap
+
+from collections import deque
+
 import numpy as np
 import psutil
 import torch
@@ -337,6 +342,119 @@ class LoadImages:
 
     def __len__(self):
         return self.nf  # number of files
+
+class LoadPcapStreams:
+    # YOLOv5 pcap streamloader
+    def __init__(self, source,metadata_path, img_size=640, transforms=None, stride = 32, auto = True):
+        self.mode = 'pcapStream'
+        self.count = 0
+        self.img_size = img_size
+        
+        # for letterbox in self.__next__
+        self.stride = stride       
+        self.auto = auto 
+
+        print('pcap file')
+        
+        metadata_path = str(metadata_path)
+
+        with open(metadata_path, 'r') as f:
+            self.metadata = client.SensorInfo(f.read())
+
+        self.fps = int(str(self.metadata.mode)[-2:])
+        print('fps: ', self.fps)
+        self.width = int(str(self.metadata.mode)[:4])
+        print('width: ', self.width)
+        self.height = int(str(self.metadata.prod_line)[5:])
+        print('height: ', self.height)
+
+        self.pcap_file = pcap.Pcap(source, self.metadata)
+        self.source = source
+
+        self.scans = client.Scans(self.pcap_file)
+        self.scans_iter = iter(self.scans)
+        
+        try:
+          (im, frame_id) , *util_val = self.__read()
+          self.img_buffer = deque([(im, frame_id)])
+          self.util_buffer = deque([util_val])
+
+        except StopIteration:
+          pass
+
+        self.thread = Thread(target=self.update, daemon=True)
+
+        self.thread.start()
+
+        self.transforms = transforms  # optional
+
+
+    def __read(self):
+      scan = next(self.scans_iter)
+
+      # ref_field = scan.field(client.ChanField.REFLECTIVITY)
+      # ref_val = client.destagger(self.pcap_file.metadata, ref_field)
+      # # ref_val = (ref_val / np.max(ref_val) * 255).astype(np.uint8)
+      # ref_img = ref_val.astype(np.uint8)
+
+      sig_field = scan.field(client.ChanField.SIGNAL)
+      sig_val = client.destagger(self.pcap_file.metadata, sig_field)
+      # sig_val = (sig_val / np.max(sig_val) * 255).astype(np.uint8)
+      sig_img = sig_val.astype(np.uint8)
+
+
+      # ir_field = scan.field(client.ChanField.NEAR_IR)
+      # ir_val = client.destagger(self.pcap_file.metadata, ir_field)
+      # # ir_val = (ir_val / np.max(ir_val) * 255).astype(np.uint8)
+      # ir_img = ir_val.astype(np.uint8)
+
+      range_field = scan.field(client.ChanField.RANGE)
+      range_val = client.destagger(self.pcap_file.metadata, range_field)
+      # range_img = (range_val / np.max(range_val) * 255).astype(np.uint8)
+      range_img = range_val
+      
+      sig_img = np.dstack((sig_img, sig_img, sig_img))
+      
+      xyzlut = client.XYZLut(self.metadata)
+      xyz_destaggered = client.destagger(self.metadata, xyzlut(scan))
+
+      return (sig_img[None,...], str(scan.frame_id)) , range_img, xyz_destaggered
+
+    def __exit__(self):
+      self.scans.close()
+
+    def update(self):
+        # Read stream `i` frames in daemon thread
+        try:
+          while True:
+              (im, frame_id), *util_vals = self.__read()
+              self.img_buffer.append((im,frame_id))
+              self.util_buffer.append(util_vals)
+
+              time.sleep(0.0)  # wait time
+        except StopIteration:
+          pass
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+
+        if not self.thread.is_alive() and not self.img_buffer:
+            raise StopIteration
+        self.count+=1
+        im0,frame_id =self.img_buffer.popleft()
+        util_vals = self.util_buffer.popleft()
+        if self.transforms:
+            im = np.stack([self.transforms(x) for x in im0])  # transforms
+        else:
+            im = np.stack([letterbox(x, self.img_size, stride=self.stride, auto=self.auto)[0] for x in im0])  # resize
+            im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW
+            im = np.ascontiguousarray(im)  # contiguous
+
+        return frame_id, im, im0, None, '',util_vals
+
+    def __len__(self):
+        return 1 # returns number of source streams
 
 
 class LoadStreams:
