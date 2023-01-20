@@ -18,12 +18,6 @@ from pathlib import Path
 from threading import Thread
 from urllib.parse import urlparse
 
-from ouster import client
-from ouster import pcap
-from utils.ouster_utils import ScanWrapper
-
-from collections import deque
-
 import numpy as np
 import psutil
 import torch
@@ -33,6 +27,7 @@ import yaml
 from PIL import ExifTags, Image, ImageOps
 from torch.utils.data import DataLoader, Dataset, dataloader, distributed
 from tqdm import tqdm
+from collections import deque
 
 from utils.augmentations import (Albumentations, augment_hsv, classify_albumentations, classify_transforms, copy_paste,
                                  letterbox, mixup, random_perspective)
@@ -40,6 +35,10 @@ from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, c
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
                            xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
 from utils.torch_utils import torch_distributed_zero_first
+
+from ouster import client
+from ouster import pcap
+from contextlib import closing
 
 # Parameters
 HELP_URL = 'See https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
@@ -344,17 +343,18 @@ class LoadImages:
     def __len__(self):
         return self.nf  # number of files
 
+
 class LoadPcapStreams:
     # YOLOv5 pcap streamloader
-    def __init__(self, source,metadata_path, img_size=640, transforms=None, stride = 32, auto = True):
-        self.mode = 'pcapStream'
+    def __init__(self, source,metadata_path, img_size=640, stride=32, auto=True, transforms=None, vid_stride=1):
+        self.mode = 'stream'
         self.count = 0
         self.img_size = img_size
-        
-        # for letterbox in self.__next__
-        self.stride = stride       
-        self.auto = auto 
-
+        self.stride = stride
+        self.left_clip = 190
+        self.right_clip = 275
+        # self.vid_stride = vid_stride  # video frame-rate stride
+        self.auto = auto
         print('pcap file')
         
         metadata_path = str(metadata_path)
@@ -366,7 +366,7 @@ class LoadPcapStreams:
         print('fps: ', self.fps)
         self.width = int(str(self.metadata.mode)[:4])
         print('width: ', self.width)
-        self.height = int(str(self.metadata.prod_line)[5:])
+        self.height = int(self.metadata.prod_line.split('-')[2])
         print('height: ', self.height)
 
         self.pcap_file = pcap.Pcap(source, self.metadata)
@@ -376,12 +376,13 @@ class LoadPcapStreams:
         self.scans_iter = iter(self.scans)
         
         try:
-          (im, frame_id) , *util_val = self.__read()
-          self.img_buffer = deque([(im, frame_id)])
+          im, *util_val = self.__read()
+          self.img_buffer = deque([im])
           self.util_buffer = deque([util_val])
 
         except StopIteration:
           pass
+
 
         self.thread = Thread(target=self.update, daemon=True)
 
@@ -393,34 +394,31 @@ class LoadPcapStreams:
     def __read(self):
       scan = next(self.scans_iter)
 
-      # ref_field = scan.field(client.ChanField.REFLECTIVITY)
-      # ref_val = client.destagger(self.pcap_file.metadata, ref_field)
-      # # ref_val = (ref_val / np.max(ref_val) * 255).astype(np.uint8)
-      # ref_img = ref_val.astype(np.uint8)
-
       sig_field = scan.field(client.ChanField.SIGNAL)
       sig_val = client.destagger(self.pcap_file.metadata, sig_field)
       # sig_val = (sig_val / np.max(sig_val) * 255).astype(np.uint8)
-      sig_img = sig_val.astype(np.uint8)
+      sig_img = sig_val.astype(np.uint8)[:,self.left_clip:-self.right_clip]
 
 
       # ir_field = scan.field(client.ChanField.NEAR_IR)
       # ir_val = client.destagger(self.pcap_file.metadata, ir_field)
-      # # ir_val = (ir_val / np.max(ir_val) * 255).astype(np.uint8)
+      # ir_val = (ir_val / np.max(ir_val) * 255).astype(np.uint8)
       # ir_img = ir_val.astype(np.uint8)
 
       range_field = scan.field(client.ChanField.RANGE)
       range_val = client.destagger(self.pcap_file.metadata, range_field)
       # range_img = (range_val / np.max(range_val) * 255).astype(np.uint8)
-      range_img = range_val
+      range_img = range_val[:,self.left_clip:-self.right_clip]
       
-      sig_img = np.dstack((sig_img, sig_img, sig_img))
-      
+      combined_img = np.dstack((sig_img, sig_img, sig_img))
+
+
       xyzlut = client.XYZLut(self.metadata)
-    #   xyz_destaggered = client.destagger(self.metadata, xyzlut(scan))
-      
-      s_wrapper = ScanWrapper(scan, self.metadata, xyzlut)
-      return (sig_img[None,...], str(scan.frame_id)) , s_wrapper
+      xyz_destaggered = client.destagger(self.metadata, xyzlut(scan))[:,self.left_clip:-self.right_clip]
+
+
+
+      return combined_img,  str(scan.frame_id)
 
     def __exit__(self):
       self.scans.close()
@@ -429,8 +427,8 @@ class LoadPcapStreams:
         # Read stream `i` frames in daemon thread
         try:
           while True:
-              (im, frame_id), *util_vals = self.__read()
-              self.img_buffer.append((im,frame_id))
+              im,*util_vals = self.__read()
+              self.img_buffer.append(im)
               self.util_buffer.append(util_vals)
 
               time.sleep(0.0)  # wait time
@@ -444,19 +442,19 @@ class LoadPcapStreams:
         if not self.thread.is_alive() and not self.img_buffer:
             raise StopIteration
         self.count+=1
-        im0,frame_id =self.img_buffer.popleft()
+        im0 =self.img_buffer.popleft()
         util_vals = self.util_buffer.popleft()
         if self.transforms:
             im = np.stack([self.transforms(x) for x in im0])  # transforms
         else:
-            im = np.stack([letterbox(x, self.img_size, stride=self.stride, auto=self.auto)[0] for x in im0])  # resize
-            im = im[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW
+            im = letterbox(im0, self.img_size, stride=self.stride, auto=self.auto)[0]  # resize
+            im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
             im = np.ascontiguousarray(im)  # contiguous
 
-        return frame_id, im, im0, None, '',util_vals
+        return self.source, im, im0, None, '',util_vals
 
     def __len__(self):
-        return 1 # returns number of source streams
+        return len(self.source)
 
 
 class LoadStreams:
@@ -857,7 +855,7 @@ class LoadImagesAndLabels(Dataset):
             r = self.img_size / max(h0, w0)  # ratio
             if r != 1:  # if sizes are not equal
                 interp = cv2.INTER_LINEAR if (self.augment or r > 1) else cv2.INTER_AREA
-                im = cv2.resize(im, (math.ceil(w0 * r), math.ceil(h0 * r)), interpolation=interp)
+                im = cv2.resize(im, (int(w0 * r), int(h0 * r)), interpolation=interp)
             return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
         return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
 
