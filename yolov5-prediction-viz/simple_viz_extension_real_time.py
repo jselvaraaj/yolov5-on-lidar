@@ -5,6 +5,8 @@ import numpy as np
 from dataclasses import dataclass
 from process_2d_preds import process_scan_factory, read_preds
 from viz_utils import ScanWrapper
+from pathlib import Path
+import typer
 
 NUM_SCENE_DATA = 100
 
@@ -94,11 +96,44 @@ def get_source_and_metadata(pcapPath, metadataPath=None):
 
     return source, metadata
 
-if __name__ == "__main__":
+def main(pcapPath: Path = typer.Argument(
+    ...,
+    exists=True,
+    file_okay=True,
+    dir_okay=False,
+    readable=True,
+    resolve_path=True,)
+    ,metadataPath: Path = typer.Argument(
+    ...,
+    exists=True,
+    file_okay=True,
+    dir_okay=False,
+    readable=True,
+    resolve_path=True,)
+    ,preds_path: Path = typer.Argument(
+    ...,
+    exists=True,
+    file_okay=True,
+    dir_okay=False,
+    readable=True,
+    resolve_path=True,)
+    ):
+    '''
+    pcap_path: the pcap file
 
-    pcapPath = r"..\..\data\from_car\OS1-64_2022-11-16\processed\Section2\1.pcap"
-    metadataPath = r"..\..\data\from_car\OS1-64_2022-11-16\processed\Section2\meta.json"
-    preds_path = r"..\..\data\from_car\OS1-64_2022-11-16\processed\Section2\1.csv"
+    meta_path: the metadata file of the pcap
+    
+    preds_path: the csv file containing the yolov5 predictions
+
+    '''
+
+    pcapPath = str(pcapPath)
+    metadataPath = str(metadataPath)
+    preds_path = str(preds_path)
+
+    # pcapPath = r"..\..\data\from_car\OS1-64_2022-11-16\processed\Section2\1.pcap"
+    # metadataPath = r"..\..\data\from_car\OS1-64_2022-11-16\processed\Section2\meta.json"
+    # preds_path = r"..\..\data\from_car\OS1-64_2022-11-16\processed\Section2\1.csv"
 
     source,metadata = get_source_and_metadata(pcapPath,metadataPath)
 
@@ -113,6 +148,7 @@ if __name__ == "__main__":
     streamViz.run(scanIterToScanWrapperIter(iter(client.Scans(source)), process_scan,metadata))
 
     
+if __name__ == "__main__":
+    typer.run(main)
     
-
 
