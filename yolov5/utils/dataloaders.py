@@ -351,8 +351,8 @@ class LoadPcapStreams:
         self.count = 0
         self.img_size = img_size
         self.stride = stride
-        self.left_clip = 190
-        self.right_clip = 275
+        self.left_clip = 182#0 # 182
+        self.right_clip = 266#-1024 #266
         # self.vid_stride = vid_stride  # video frame-rate stride
         self.auto = auto
         print('pcap file')
@@ -414,7 +414,7 @@ class LoadPcapStreams:
 
 
       xyzlut = client.XYZLut(self.metadata)
-      xyz_destaggered = client.destagger(self.metadata, xyzlut(scan))[:,self.left_clip:-self.right_clip]
+      xyz_destaggered = client.destagger(self.metadata, xyzlut(scan))
 
 
 
@@ -447,11 +447,12 @@ class LoadPcapStreams:
         if self.transforms:
             im = np.stack([self.transforms(x) for x in im0])  # transforms
         else:
-            im = letterbox(im0, self.img_size, stride=self.stride, auto=self.auto)[0]  # resize
+            size_before = im0.shape
+            im,ratio, *_ = letterbox(im0, self.img_size, stride=self.stride, auto=self.auto) # resize
             im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
             im = np.ascontiguousarray(im)  # contiguous
 
-        return self.source, im, im0, None, '',util_vals
+        return self.source, im, im0, None, '',util_vals, ratio, size_before
 
     def __len__(self):
         return len(self.source)

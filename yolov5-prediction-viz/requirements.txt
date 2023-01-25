@@ -1,0 +1,2 @@
+-e git+https://github.com/AtsushiSakai/PythonRobotics.git@98d5851c4da12bdb7c500682e32cfb5277adc782#egg=PythonRobotics
+skspatial # for plane fitting

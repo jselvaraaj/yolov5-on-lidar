@@ -1,3 +1,4 @@
+import cv2
 from ouster.sdk import viz
 from ouster import client
 import numpy as np
@@ -16,9 +17,26 @@ class Visualizer:
 
         self.viewer = viz.PointViz(self.name)
         self.add_axis()
+        self.add_grid()
         viz.add_default_controls(self.viewer)
 
         return self
+
+    def add_grid(self):
+        a,b,c,d = 0,0,1,0
+
+        # Define a range of parameterized coordinates for x and y
+        rng = np.random.default_rng(seed=1515)
+        x_range = rng.integers(-25,25, size=10000)
+        y_range = rng.integers(-25,25, size=10000)
+
+        # Generate the corresponding z values using the equation of the plane
+        z_values = (d - a*x_range - b*y_range) / c
+
+        # Generate a set of points by combining the x, y, and z values
+        points = np.stack((x_range, y_range, z_values), axis=-1)
+
+        self.add_xyz(points)
 
     def add_axis(self):
         def get_axis():
@@ -47,7 +65,26 @@ class Visualizer:
             return cloud_axis
         self.viewer.add(get_axis())
 
-    def add_scan(self,scan):
+    def __add_image(self, scan,img,two_d_coord,position ="top"):
+        # creating Image viz elements
+        r_img = viz.Image()
+        if two_d_coord:
+            for x,y,w,h in two_d_coord:
+                r_img.add_rectangle(x,y,w,h)
+                img = cv2.rectangle(img,(x,y),(x+w,y+h),(0,255,0),2)
+        r_img.set_image(img)
+        if position == "top":
+            # top center position
+            r_img.set_position(-scan.img_screen_len / 2, scan.img_screen_len / 2,
+                                1 - scan.img_screen_height, 1)
+        else:
+            #bottom center position
+            r_img.set_position(-scan.img_screen_len / 2, scan.img_screen_len / 2, -1,
+                            -1 + scan.img_screen_height)
+
+        self.viewer.add(r_img)
+
+    def add_scan(self,scan,two_d_coord = None):
         # print(xyz.shape)
 
         if not self.use_pcd:
@@ -71,12 +108,15 @@ class Visualizer:
                 pass
             self.viewer.add(cloud_scan)
             self.num_geo += 1
+
+        self.__add_image(scan,scan.range,two_d_coord,"top")
+        self.__add_image(scan,scan.near_ir,two_d_coord, "bottom")
+
         self.viewer.update()
         self.objs.append(cloud_scan)
         return cloud_scan
 
-    def add_pcd(self, pcd):
-        xyz = pcd_to_numpy(pcd)
+    def add_xyz(self,xyz):
         cloud_scan = viz.Cloud(xyz.shape[0])
         cloud_scan.set_xyz(np.ravel(xyz.T))
 
@@ -86,6 +126,11 @@ class Visualizer:
         self.num_geo += 1
         self.viewer.update()
         self.objs.append(cloud_scan)
+
+
+    def add_pcd(self, pcd):
+        xyz = pcd_to_numpy(pcd)
+        self.add_xyz(xyz)
 
     def add_bbox(self, pose):
         bbox = viz.Cuboid(pose, (0.5, 0.5, 0.5))
